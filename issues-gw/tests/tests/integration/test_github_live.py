@@ -1,3 +1,4 @@
+# Coded by Dev Mulchandani
 import os, pytest, httpx
 pytestmark = pytest.mark.skipif(os.getenv("LIVE") != "1", reason="Set LIVE=1 to run live tests")
 
