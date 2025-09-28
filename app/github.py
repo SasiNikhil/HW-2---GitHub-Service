@@ -17,7 +17,10 @@ class GitHubClient:
         return f"{BASE}/repos/{self.owner}/{self.repo}"
 
     async def create_issue(self, payload: dict): return await self.client.post(f'{self._repo()}/issues', json=payload)
-    async def list_issues(self, params: dict): return await self.client.get(f'{self._repo()}/issues', params=params)
+    # ETag support by lordphone
+    async def list_issues(self, params: dict, headers: dict = None): 
+        request_headers = headers or {}
+        return await self.client.get(f'{self._repo()}/issues', params=params, headers=request_headers)
     async def get_issue(self, number: int): return await self.client.get(f'{self._repo()}/issues/{number}')
     async def update_issue(self, number: int, payload: dict): return await self.client.patch(f'{self._repo()}/issues/{number}', json=payload)
     async def create_comment(self, number: int, payload: dict): return await self.client.post(f'{self._repo()}/issues/{number}/comments', json=payload)

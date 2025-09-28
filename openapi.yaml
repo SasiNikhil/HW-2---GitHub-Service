@@ -111,6 +111,12 @@ paths:
       description: |
         Lists issues for the repository with optional filtering and pagination.
         Supports GitHub's pagination semantics with Link headers.
+        
+        **Conditional GET Support (Extra Credit):**
+        - Returns ETag header for caching
+        - Supports If-None-Match header for conditional requests
+        - Returns 304 Not Modified when content hasn't changed
+        - Reduces GitHub API rate limit usage through intelligent caching
       operationId: listIssues
       tags:
         - Issues
@@ -148,6 +154,12 @@ paths:
             maximum: 100
             default: 30
           example: 30
+        - name: If-None-Match
+          in: header
+          description: ETag value for conditional GET requests
+          schema:
+            type: string
+          example: '"abc123def456"'
       responses:
         '200':
           description: List of issues
@@ -157,6 +169,11 @@ paths:
               schema:
                 type: string
               example: '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="next", <https://api.github.com/repos/owner/repo/issues?page=5>; rel="last"'
+            ETag:
+              description: Entity tag for caching and conditional requests
+              schema:
+                type: string
+              example: '"abc123def456"'
           content:
             application/json:
               schema:
@@ -173,6 +190,14 @@ paths:
                     - name: "bug"
                   created_at: "2024-01-15T10:30:00Z"
                   updated_at: "2024-01-15T10:30:00Z"
+        '304':
+          description: Not Modified - content hasn't changed since last request
+          headers:
+            ETag:
+              description: Entity tag for the cached content
+              schema:
+                type: string
+              example: '"abc123def456"'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '502':

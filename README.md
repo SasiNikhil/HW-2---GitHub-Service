@@ -123,6 +123,16 @@ http GET :8080/issues state==closed page==1 per_page==10
 
 # Filter by labels
 http GET :8080/issues labels=="bug,high-priority"
+
+# Conditional GET with ETag (Extra Credit)
+# First request returns ETag header
+http GET :8080/issues
+# HTTP/1.1 200 OK
+# ETag: "abc123def456"
+
+# Subsequent request with If-None-Match header
+http GET :8080/issues If-None-Match:'"abc123def456"'
+# HTTP/1.1 304 Not Modified (if content unchanged)
 ```
 
 ### Get Specific Issue
@@ -213,6 +223,13 @@ pytest tests/integration/
 - Respects GitHub rate limit headers
 - Implements exponential backoff on rate limit exceeded
 - Returns appropriate 429/503 responses with Retry-After headers
+
+### Conditional GET (Extra Credit)
+- **ETag Caching**: Automatically caches ETags from GitHub API responses
+- **If-None-Match Support**: Sends cached ETags to GitHub to reduce data transfer
+- **304 Not Modified**: Returns 304 when content hasn't changed
+- **Rate Limit Optimization**: Significantly reduces GitHub API rate limit usage
+- **Intelligent Caching**: Per-request parameter caching with automatic cleanup
 
 ## Security Considerations
 

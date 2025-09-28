@@ -16,6 +16,8 @@ async def startup():
     # Initialize webhook storage for idempotency
     app.state.processed_webhooks = set()
     app.state.webhook_events = []
+    # Initialize ETag cache for conditional GET
+    app.state.etag_cache = {}
 
 @app.get('/healthz')
 async def healthz():
