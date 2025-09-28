@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Request, Response, HTTPException
-import hmac, hashlib, json
+import hmac
+import hashlib
+import json
 from datetime import datetime
 
 router = APIRouter()
+
 
 def verify_signature(secret: str, signature: str, body: bytes) -> bool:
     mac = hmac.new(secret.encode(), msg=body, digestmod=hashlib.sha256)
@@ -31,12 +34,12 @@ async def webhook(request: Request):
 
     # Create dedupe key using delivery ID + action
     dedupe_key = f"{delivery_id}:{action}"
-    
+
     # Check if already processed (idempotency)
     if dedupe_key in request.app.state.processed_webhooks:
         # Already processed - return 200 for idempotent response
         return Response(status_code=200)
-    
+
     # Store webhook event for debugging
     event_data = {
         "id": delivery_id,
@@ -46,19 +49,19 @@ async def webhook(request: Request):
         "timestamp": datetime.utcnow().isoformat(),
         "payload_size": len(body)
     }
-    
+
     # Add to storage
     request.app.state.webhook_events.append(event_data)
     request.app.state.processed_webhooks.add(dedupe_key)
-    
+
     # Keep only last 100 events to prevent memory growth
     if len(request.app.state.webhook_events) > 100:
         request.app.state.webhook_events = request.app.state.webhook_events[-100:]
-    
+
     return Response(status_code=204)
 
 
-# get_events by lordphone  
+# get_events by lordphone
 @router.get("/events")
 async def get_events(request: Request, limit: int = 50):
     """

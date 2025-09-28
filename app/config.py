@@ -12,12 +12,14 @@ try:
 except Exception:
     pass
 
+
 class Settings(BaseModel):
     github_token: str = Field(default_factory=lambda: os.getenv('GITHUB_TOKEN', ''))
     github_owner: str = Field(default_factory=lambda: os.getenv('GITHUB_OWNER', ''))
     github_repo: str = Field(default_factory=lambda: os.getenv('GITHUB_REPO', ''))
     webhook_secret: str = Field(default_factory=lambda: os.getenv('WEBHOOK_SECRET', ''))
     port: int = Field(default_factory=lambda: int(os.getenv('PORT', '8080')))
+
 
 def get_settings() -> Settings:
     s = Settings()

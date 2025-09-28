@@ -1,6 +1,5 @@
 # Coded by Dev Mulchandani
-import os 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
@@ -18,6 +17,7 @@ async def startup():
     app.state.webhook_events = []
     # Initialize ETag cache for conditional GET
     app.state.etag_cache = {}
+
 
 @app.get('/healthz')
 async def healthz():

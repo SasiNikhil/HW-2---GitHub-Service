@@ -45,6 +45,27 @@ def _generate_cache_key(params: Dict[str, Union[str, int]]) -> str:
     return hashlib.md5(sorted_params.encode()).hexdigest()
 
 
+# by lordphone
+def _handle_etag_cache(etag_cache: dict, cache_key: str, github_etag: str):
+    """Handle ETag caching with size limits."""
+    etag_cache[cache_key] = github_etag
+
+    # Limit cache size to prevent memory growth
+    if len(etag_cache) > 1000:
+        # Remove oldest entries (simple FIFO)
+        keys_to_remove = list(etag_cache.keys())[:100]
+        for key in keys_to_remove:
+            etag_cache.pop(key, None)
+
+
+# by lordphone
+def _check_client_etag_match(client_etag: str, github_etag: str) -> bool:
+    """Check if client ETag matches GitHub ETag."""
+    if not (client_etag and github_etag):
+        return False
+    return client_etag.strip('"') == github_etag.strip('"')
+
+
 # ETag conditional GET implementation by lordphone
 @router.get("/issues", response_model=List[IssueOut])
 async def list_issues(
@@ -64,11 +85,11 @@ async def list_issues(
 
     # Generate cache key for this request
     cache_key = _generate_cache_key(params)
-    
+
     # Check if we have a cached ETag for this request
     etag_cache = getattr(request.app.state, 'etag_cache', {})
     cached_etag = etag_cache.get(cache_key)
-    
+
     # Check if client sent If-None-Match header
     client_etag = request.headers.get("If-None-Match")
 
@@ -78,14 +99,13 @@ async def list_issues(
         github_headers = {}
         if cached_etag:
             github_headers["If-None-Match"] = cached_etag
-            
+
         r = await gh.list_issues(params, headers=github_headers)
     finally:
         await gh.close()
 
     # Handle 304 Not Modified from GitHub
     if r.status_code == 304:
-        # GitHub says content hasn't changed
         response.status_code = 304
         if cached_etag:
             response.headers["ETag"] = cached_etag
@@ -99,15 +119,8 @@ async def list_issues(
     # Extract and cache ETag from GitHub response
     github_etag = r.headers.get("ETag")
     if github_etag:
-        etag_cache[cache_key] = github_etag
+        _handle_etag_cache(etag_cache, cache_key, github_etag)
         response.headers["ETag"] = github_etag
-        
-        # Limit cache size to prevent memory growth
-        if len(etag_cache) > 1000:
-            # Remove oldest entries (simple FIFO)
-            keys_to_remove = list(etag_cache.keys())[:100]
-            for key in keys_to_remove:
-                etag_cache.pop(key, None)
 
     # Forward GitHub's Link header for pagination
     link = r.headers.get("Link")
@@ -115,7 +128,7 @@ async def list_issues(
         response.headers["Link"] = link
 
     # Check if client's ETag matches current ETag (client-side conditional GET)
-    if client_etag and github_etag and client_etag.strip('"') == github_etag.strip('"'):
+    if _check_client_etag_match(client_etag, github_etag):
         response.status_code = 304
         return Response(status_code=304)
 
