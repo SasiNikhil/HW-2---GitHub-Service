@@ -1,0 +1,279 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Code Quality & Linting
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install flake8 black isort mypy
+        
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. GitHub editor is 127 chars wide
+        flake8 app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Check code formatting with black
+      run: |
+        black --check --diff app/
+        
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only --diff app/
+        
+    - name: Type checking with mypy
+      run: |
+        mypy app/ --ignore-missing-imports || true
+
+  test:
+    runs-on: ubuntu-latest
+    name: Run Tests
+    needs: lint
+    
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+        
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-${{ matrix.python-version }}-
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Set up test environment
+      run: |
+        # Set test environment variables
+        echo "GITHUB_TOKEN=test_token" >> $GITHUB_ENV
+        echo "GITHUB_OWNER=octocat" >> $GITHUB_ENV
+        echo "GITHUB_REPO=hello-world" >> $GITHUB_ENV
+        echo "WEBHOOK_SECRET=testsecret" >> $GITHUB_ENV
+        echo "PORT=8080" >> $GITHUB_ENV
+        
+    - name: Run unit tests with coverage
+      run: |
+        pytest tests/ --cov=app --cov-report=xml --cov-report=term --cov-fail-under=80 -v
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  security:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    needs: lint
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+        
+    - name: Run Bandit security scan
+      run: |
+        bandit -r app/ -f json -o bandit-report.json || true
+        bandit -r app/ || true
+        
+    - name: Check for known security vulnerabilities
+      run: |
+        pip install -r requirements.txt
+        safety check --json || true
+
+  build:
+    runs-on: ubuntu-latest
+    name: Build Docker Image
+    needs: [test, security]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        tags: issues-gw:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Test Docker image
+      run: |
+        # Build and run a quick test of the Docker image
+        docker build -t issues-gw:test .
+        
+        # Start container in background
+        docker run -d --name test-container \
+          -e GITHUB_TOKEN=test_token \
+          -e GITHUB_OWNER=octocat \
+          -e GITHUB_REPO=hello-world \
+          -e WEBHOOK_SECRET=testsecret \
+          -e PORT=8080 \
+          -p 8080:8080 \
+          issues-gw:test
+          
+        # Wait for container to start
+        sleep 10
+        
+        # Test health endpoint
+        curl -f http://localhost:8080/healthz || exit 1
+        
+        # Cleanup
+        docker stop test-container
+        docker rm test-container
+
+  openapi-validation:
+    runs-on: ubuntu-latest
+    name: Validate OpenAPI Spec
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Validate OpenAPI specification
+      uses: char0n/swagger-editor-validate@v1
+      with:
+        definition-file: openapi.yaml
+        
+    - name: Generate API documentation
+      run: |
+        # Install swagger-codegen or similar tool to validate spec
+        npm install -g @apidevtools/swagger-parser
+        swagger-parser validate openapi.yaml
+
+  integration-test:
+    runs-on: ubuntu-latest
+    name: Integration Tests
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run integration tests (if LIVE=1)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_OWNER: ${{ secrets.GITHUB_OWNER }}
+        GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+        WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        LIVE: "1"
+      run: |
+        # Only run if secrets are available
+        if [ -n "$GITHUB_TOKEN" ] && [ -n "$GITHUB_OWNER" ] && [ -n "$GITHUB_REPO" ]; then
+          pytest tests/tests/integration/ -v
+        else
+          echo "Skipping integration tests - secrets not available"
+        fi
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    name: Deploy to Staging
+    needs: [test, security, build, openapi-validation]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to staging environment
+      run: |
+        echo "🚀 Deploying to staging environment..."
+        # Add your staging deployment commands here
+        # Example: deploy to Heroku, AWS, etc.
+        
+  deploy-production:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [test, security, build, openapi-validation, integration-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to production environment
+      run: |
+        echo "🚀 Deploying to production environment..."
+        # Add your production deployment commands here
+        # Example: deploy to production server, update container registry, etc.
+
+  notification:
+    runs-on: ubuntu-latest
+    name: Notify Results
+    needs: [lint, test, security, build, openapi-validation]
+    if: always()
+    
+    steps:
+    - name: Notify success
+      if: ${{ needs.lint.result == 'success' && needs.test.result == 'success' && needs.security.result == 'success' && needs.build.result == 'success' }}
+      run: |
+        echo "✅ All CI/CD checks passed successfully!"
+        
+    - name: Notify failure
+      if: ${{ needs.lint.result == 'failure' || needs.test.result == 'failure' || needs.security.result == 'failure' || needs.build.result == 'failure' }}
+      run: |
+        echo "❌ CI/CD pipeline failed. Check the logs above."
+        exit 1

@@ -1,0 +1,794 @@
+openapi: 3.1.0
+info:
+  title: GitHub Issues Gateway Service
+  description: |
+    A FastAPI-based service that wraps the GitHub REST API for Issues management, 
+    providing a clean HTTP API for issue CRUD operations, comment management, 
+    and webhook handling with HMAC signature validation.
+    
+    ## Features
+    - Issue CRUD operations (Create, Read, Update, Close)
+    - Comment management
+    - Secure webhook processing with HMAC SHA-256 validation
+    - Rate limit handling and pagination support
+    - Idempotent webhook processing
+    
+  version: 1.0.0
+  contact:
+    name: CMPE 272 Assignment
+    email: student@sjsu.edu
+  license:
+    name: Educational Use
+    
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://your-domain.com
+    description: Production server
+
+security:
+  - githubToken: []
+
+paths:
+  /healthz:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the service
+      operationId: healthCheck
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+
+  /issues:
+    post:
+      summary: Create a new issue
+      description: Creates a new GitHub issue in the configured repository
+      operationId: createIssue
+      tags:
+        - Issues
+      security:
+        - githubToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueCreateRequest'
+            examples:
+              bug_report:
+                summary: Bug report example
+                value:
+                  title: "Bug: Application crashes on startup"
+                  body: "Steps to reproduce:\n1. Start app\n2. Click login\n3. App crashes"
+                  labels: ["bug", "high-priority"]
+              feature_request:
+                summary: Feature request example
+                value:
+                  title: "Feature: Add dark mode"
+                  body: "Users have requested a dark mode option for better accessibility"
+                  labels: ["enhancement", "ui"]
+      responses:
+        '201':
+          description: Issue created successfully
+          headers:
+            Location:
+              description: URL of the created issue
+              schema:
+                type: string
+                example: "/issues/42"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+              example:
+                number: 42
+                html_url: "https://github.com/owner/repo/issues/42"
+                state: "open"
+                title: "Bug: Application crashes on startup"
+                body: "Steps to reproduce:\n1. Start app\n2. Click login\n3. App crashes"
+                labels:
+                  - name: "bug"
+                  - name: "high-priority"
+                created_at: "2024-01-15T10:30:00Z"
+                updated_at: "2024-01-15T10:30:00Z"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+    get:
+      summary: List issues
+      description: |
+        Lists issues for the repository with optional filtering and pagination.
+        Supports GitHub's pagination semantics with Link headers.
+      operationId: listIssues
+      tags:
+        - Issues
+      security:
+        - githubToken: []
+      parameters:
+        - name: state
+          in: query
+          description: Filter issues by state
+          schema:
+            type: string
+            enum: [open, closed, all]
+            default: open
+          example: open
+        - name: labels
+          in: query
+          description: Comma-separated list of label names to filter by
+          schema:
+            type: string
+          example: "bug,high-priority"
+        - name: page
+          in: query
+          description: Page number for pagination
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: per_page
+          in: query
+          description: Number of items per page (max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+          example: 30
+      responses:
+        '200':
+          description: List of issues
+          headers:
+            Link:
+              description: GitHub-style pagination links
+              schema:
+                type: string
+              example: '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="next", <https://api.github.com/repos/owner/repo/issues?page=5>; rel="last"'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Issue'
+              example:
+                - number: 42
+                  html_url: "https://github.com/owner/repo/issues/42"
+                  state: "open"
+                  title: "Bug: Application crashes on startup"
+                  body: "Steps to reproduce..."
+                  labels:
+                    - name: "bug"
+                  created_at: "2024-01-15T10:30:00Z"
+                  updated_at: "2024-01-15T10:30:00Z"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /issues/{number}:
+    get:
+      summary: Get a specific issue
+      description: Retrieves a single issue by its number
+      operationId: getIssue
+      tags:
+        - Issues
+      security:
+        - githubToken: []
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Issue number
+          schema:
+            type: integer
+            minimum: 1
+          example: 42
+      responses:
+        '200':
+          description: Issue details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+              example:
+                number: 42
+                html_url: "https://github.com/owner/repo/issues/42"
+                state: "open"
+                title: "Bug: Application crashes on startup"
+                body: "Steps to reproduce..."
+                labels:
+                  - name: "bug"
+                created_at: "2024-01-15T10:30:00Z"
+                updated_at: "2024-01-15T10:30:00Z"
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+    patch:
+      summary: Update an issue
+      description: |
+        Updates an existing issue. Can modify title, body, and state.
+        Setting state to "closed" closes the issue (GitHub doesn't support delete).
+      operationId: updateIssue
+      tags:
+        - Issues
+      security:
+        - githubToken: []
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Issue number
+          schema:
+            type: integer
+            minimum: 1
+          example: 42
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueUpdateRequest'
+            examples:
+              update_title:
+                summary: Update title and body
+                value:
+                  title: "Updated: Application crashes on startup"
+                  body: "Updated description with more details and workaround"
+              close_issue:
+                summary: Close an issue
+                value:
+                  state: "closed"
+              reopen_issue:
+                summary: Reopen an issue
+                value:
+                  state: "open"
+      responses:
+        '200':
+          description: Issue updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /issues/{number}/comments:
+    post:
+      summary: Add a comment to an issue
+      description: Creates a new comment on the specified issue
+      operationId: createComment
+      tags:
+        - Comments
+      security:
+        - githubToken: []
+      parameters:
+        - name: number
+          in: path
+          required: true
+          description: Issue number
+          schema:
+            type: integer
+            minimum: 1
+          example: 42
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreateRequest'
+            examples:
+              response_comment:
+                summary: Response to issue
+                value:
+                  body: "Thanks for reporting this issue. We're investigating and will provide an update soon."
+              solution_comment:
+                summary: Solution provided
+                value:
+                  body: "This has been fixed in version 1.2.3. Please update and let us know if the issue persists."
+      responses:
+        '201':
+          description: Comment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+              example:
+                id: 123456789
+                body: "Thanks for reporting this issue. We're investigating..."
+                user:
+                  login: "maintainer"
+                  id: 12345
+                  avatar_url: "https://github.com/images/error/maintainer_happy.gif"
+                created_at: "2024-01-15T11:00:00Z"
+                html_url: "https://github.com/owner/repo/issues/42#issuecomment-123456789"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+
+  /webhook:
+    post:
+      summary: GitHub webhook endpoint
+      description: |
+        Receives and processes GitHub webhooks for issues and issue comments.
+        Validates HMAC SHA-256 signature and implements idempotent processing.
+        
+        Supported events:
+        - `issues` (opened, closed, edited, etc.)
+        - `issue_comment` (created, edited, deleted)
+        - `ping` (webhook verification)
+      operationId: handleWebhook
+      tags:
+        - Webhooks
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          description: GitHub event type
+          schema:
+            type: string
+            enum: [issues, issue_comment, ping]
+          example: issues
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          description: Unique delivery ID for idempotency
+          schema:
+            type: string
+          example: "12345678-1234-1234-1234-123456789012"
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          description: HMAC SHA-256 signature for verification
+          schema:
+            type: string
+          example: "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17"
+      requestBody:
+        required: true
+        description: GitHub webhook payload
+        content:
+          application/json:
+            schema:
+              type: object
+              description: GitHub webhook payload (varies by event type)
+            examples:
+              ping_event:
+                summary: Ping event for webhook verification
+                value:
+                  zen: "Keep it logically awesome"
+                  hook_id: 12345678
+              issue_opened:
+                summary: Issue opened event
+                value:
+                  action: "opened"
+                  issue:
+                    number: 42
+                    title: "Bug report"
+                    state: "open"
+                  repository:
+                    name: "test-repo"
+                    full_name: "owner/test-repo"
+              comment_created:
+                summary: Issue comment created event
+                value:
+                  action: "created"
+                  issue:
+                    number: 42
+                  comment:
+                    id: 123456789
+                    body: "This is a comment"
+      responses:
+        '204':
+          description: Webhook processed successfully
+        '200':
+          description: Webhook already processed (idempotent response)
+        '400':
+          description: Invalid event type or malformed payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Bad Request"
+                message: "Unknown event type or invalid payload"
+        '401':
+          description: Invalid HMAC signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Unauthorized"
+                message: "Invalid signature"
+
+  /events:
+    get:
+      summary: List recent webhook events
+      description: |
+        Returns the last N processed webhook deliveries for debugging purposes.
+        This is an optional endpoint for troubleshooting webhook processing.
+      operationId: getWebhookEvents
+      tags:
+        - Webhooks
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of events to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          example: 20
+      responses:
+        '200':
+          description: List of recent webhook events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookEvent'
+              example:
+                - id: "12345678-1234-1234-1234-123456789012"
+                  event: "issues"
+                  action: "opened"
+                  issue_number: 42
+                  timestamp: "2024-01-15T10:30:00Z"
+                  payload_size: 1024
+                - id: "87654321-4321-4321-4321-210987654321"
+                  event: "issue_comment"
+                  action: "created"
+                  issue_number: 42
+                  timestamp: "2024-01-15T11:00:00Z"
+                  payload_size: 512
+
+components:
+  securitySchemes:
+    githubToken:
+      type: http
+      scheme: bearer
+      description: |
+        GitHub Fine-Grained Personal Access Token with "Issues: Read and Write" permissions
+        for the target repository.
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: Health status of the service
+      example:
+        status: "ok"
+
+    Label:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Label name
+          example: "bug"
+        color:
+          type: string
+          description: Label color (hex code without #)
+          example: "d73a49"
+        description:
+          type: string
+          description: Label description
+          example: "Something isn't working"
+
+    User:
+      type: object
+      required:
+        - login
+        - id
+      properties:
+        login:
+          type: string
+          description: GitHub username
+          example: "octocat"
+        id:
+          type: integer
+          description: GitHub user ID
+          example: 1
+        avatar_url:
+          type: string
+          format: uri
+          description: User avatar URL
+          example: "https://github.com/images/error/octocat_happy.gif"
+
+    IssueCreateRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Issue title
+          example: "Bug: Application crashes on startup"
+        body:
+          type: string
+          description: Issue description/body
+          example: "Steps to reproduce:\n1. Start app\n2. Click login\n3. App crashes"
+        labels:
+          type: array
+          items:
+            type: string
+          description: Array of label names to apply to the issue
+          example: ["bug", "high-priority"]
+          maxItems: 100
+
+    IssueUpdateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Updated issue title
+          example: "Updated: Application crashes on startup"
+        body:
+          type: string
+          description: Updated issue description/body
+          example: "Updated description with more details"
+        state:
+          type: string
+          enum: [open, closed]
+          description: Issue state (use 'closed' to close an issue)
+          example: "closed"
+
+    Issue:
+      type: object
+      required:
+        - number
+        - html_url
+        - state
+        - title
+        - created_at
+        - updated_at
+      properties:
+        number:
+          type: integer
+          description: Issue number
+          example: 42
+        html_url:
+          type: string
+          format: uri
+          description: GitHub issue URL
+          example: "https://github.com/owner/repo/issues/42"
+        state:
+          type: string
+          enum: [open, closed]
+          description: Issue state
+          example: "open"
+        title:
+          type: string
+          description: Issue title
+          example: "Bug: Application crashes on startup"
+        body:
+          type: string
+          nullable: true
+          description: Issue description/body
+          example: "Steps to reproduce:\n1. Start app\n2. Click login\n3. App crashes"
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/Label'
+          description: Labels applied to the issue
+        user:
+          $ref: '#/components/schemas/User'
+        created_at:
+          type: string
+          format: date-time
+          description: Issue creation timestamp
+          example: "2024-01-15T10:30:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Issue last update timestamp
+          example: "2024-01-15T10:30:00Z"
+
+    CommentCreateRequest:
+      type: object
+      required:
+        - body
+      properties:
+        body:
+          type: string
+          minLength: 1
+          description: Comment content
+          example: "Thanks for reporting this issue. We're investigating."
+
+    Comment:
+      type: object
+      required:
+        - id
+        - body
+        - user
+        - created_at
+        - html_url
+      properties:
+        id:
+          type: integer
+          description: Comment ID
+          example: 123456789
+        body:
+          type: string
+          description: Comment content
+          example: "Thanks for reporting this issue. We're investigating."
+        user:
+          $ref: '#/components/schemas/User'
+        created_at:
+          type: string
+          format: date-time
+          description: Comment creation timestamp
+          example: "2024-01-15T11:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Comment last update timestamp
+          example: "2024-01-15T11:00:00Z"
+        html_url:
+          type: string
+          format: uri
+          description: GitHub comment URL
+          example: "https://github.com/owner/repo/issues/42#issuecomment-123456789"
+
+    WebhookEvent:
+      type: object
+      required:
+        - id
+        - event
+        - action
+        - timestamp
+      properties:
+        id:
+          type: string
+          description: GitHub delivery ID
+          example: "12345678-1234-1234-1234-123456789012"
+        event:
+          type: string
+          description: GitHub event type
+          example: "issues"
+        action:
+          type: string
+          description: Event action
+          example: "opened"
+        issue_number:
+          type: integer
+          nullable: true
+          description: Related issue number (if applicable)
+          example: 42
+        timestamp:
+          type: string
+          format: date-time
+          description: Event processing timestamp
+          example: "2024-01-15T10:30:00Z"
+        payload_size:
+          type: integer
+          description: Size of the webhook payload in bytes
+          example: 1024
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error type
+          example: "Bad Request"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Invalid request payload"
+        details:
+          type: object
+          description: Additional error details
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad request - invalid input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            validation_error:
+              summary: Validation error
+              value:
+                error: "Bad Request"
+                message: "Validation Failed"
+                details:
+                  field: "title"
+                  issue: "Title cannot be empty"
+            invalid_state:
+              summary: Invalid state value
+              value:
+                error: "Bad Request"
+                message: "Invalid state value. Must be 'open' or 'closed'"
+
+    Unauthorized:
+      description: Unauthorized - invalid or missing GitHub token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Unauthorized"
+            message: "Bad credentials or insufficient permissions"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Not Found"
+            message: "Issue not found"
+
+    BadGateway:
+      description: Bad gateway - upstream GitHub API error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            github_error:
+              summary: GitHub API error
+              value:
+                error: "Bad Gateway"
+                message: "GitHub API returned an error"
+            rate_limit:
+              summary: Rate limit exceeded
+              value:
+                error: "Service Unavailable"
+                message: "GitHub API rate limit exceeded. Try again later."
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: Issues
+    description: GitHub issue CRUD operations
+  - name: Comments
+    description: Issue comment management
+  - name: Webhooks
+    description: GitHub webhook processing and event history
