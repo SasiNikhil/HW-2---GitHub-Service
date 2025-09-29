@@ -1,7 +1,6 @@
 # app/routes/issues.py
 """
-Owner: (your name/email)
-Summary: Issue CRUD endpoints for the GitHub Issues Gateway.
+Mikkilineni Sasi Nikhil
 """
 
 from typing import Dict, List, Optional, Union
