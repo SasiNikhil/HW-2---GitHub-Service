@@ -11,7 +11,7 @@ import respx
 from fastapi.testclient import TestClient
 
 # Put project root (folder that contains "app/") on sys.path
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 from app.main import app  # noqa: E402
 from app.config import get_settings  # noqa: E402
