@@ -1,0 +1,92 @@
+name: CI/CD Pipeline
+# Made by lordphone
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install flake8
+        
+    - name: Lint with flake8
+      run: |
+        flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 app/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  test:
+    runs-on: ubuntu-latest
+    name: Test
+    needs: lint
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Set PYTHONPATH
+      run: echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+        
+    - name: Set up test environment
+      run: |
+        echo "GITHUB_TOKEN=test_token" >> $GITHUB_ENV
+        echo "GITHUB_OWNER=octocat" >> $GITHUB_ENV
+        echo "GITHUB_REPO=hello-world" >> $GITHUB_ENV
+        echo "WEBHOOK_SECRET=testsecret" >> $GITHUB_ENV
+        echo "PORT=8080" >> $GITHUB_ENV
+        
+    - name: Run tests
+      run: |
+        pytest tests/ --cov=app --cov-report=term -v
+
+  build:
+    runs-on: ubuntu-latest
+    name: Build
+    needs: test
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build Docker image
+      run: |
+        docker build -t issues-gw:latest .
+        
+    - name: Test Docker image
+      run: |
+        docker run -d --name test-container \
+          -e GITHUB_TOKEN=test_token \
+          -e GITHUB_OWNER=octocat \
+          -e GITHUB_REPO=hello-world \
+          -e WEBHOOK_SECRET=testsecret \
+          -e PORT=8080 \
+          -p 8080:8080 \
+          issues-gw:latest
+          
+        sleep 10
+        curl -f http://localhost:8080/healthz
+        docker stop test-container
+        docker rm test-container
