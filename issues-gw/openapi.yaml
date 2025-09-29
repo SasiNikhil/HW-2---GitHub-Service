@@ -1,0 +1,216 @@
+openapi: 3.1.0
+info:
+  title: GitHub Issues Gateway
+  version: 1.0.0
+  description: Wrapper API exposing CRUD for GitHub Issues and comments plus webhook handling.
+servers:
+  - url: http://localhost:{port}
+    variables:
+      port:
+        default: '8080'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Label:
+      type: object
+      properties:
+        name:
+          type: string
+      required: [name]
+    IssueIn:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string, nullable: true }
+        labels:
+          type: array
+          items: { type: string }
+      required: [title]
+    IssueOut:
+      type: object
+      properties:
+        number: { type: integer }
+        html_url: { type: string }
+        state: { type: string, enum: [open, closed] }
+        title: { type: string }
+        body: { type: string, nullable: true }
+        labels:
+          type: array
+          items: { $ref: '#/components/schemas/Label' }
+        created_at: { type: string }
+        updated_at: { type: string }
+      required: [number, html_url, state, title, created_at, updated_at, labels]
+    IssueUpdate:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+        state: { type: string, enum: [open, closed] }
+    CommentIn:
+      type: object
+      properties:
+        body: { type: string }
+      required: [body]
+    CommentOut:
+      type: object
+      properties:
+        id: { type: integer }
+        body: { type: string }
+        user: { type: object }
+        created_at: { type: string }
+        html_url: { type: string }
+      required: [id, body, user, created_at, html_url]
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        detail: { type: string }
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+  /issues:
+    post:
+      operationId: createIssue
+      summary: Create an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueIn' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueOut' }
+        '400': { description: Bad Request }
+        '401': { description: Unauthorized }
+    get:
+      operationId: listIssues
+      summary: List issues
+      parameters:
+        - in: query
+          name: state
+          schema: { type: string, enum: [open, closed, all], default: open }
+        - in: query
+          name: labels
+          schema: { type: string, description: 'Comma-separated label names' }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: per_page
+          schema: { type: integer, default: 30, maximum: 100 }
+      responses:
+        '200':
+          description: OK
+          headers:
+            Link:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/IssueOut' }
+  /issues/{number}:
+    get:
+      operationId: getIssue
+      parameters:
+        - in: path
+          name: number
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueOut' }
+        '404': { description: Not Found }
+    patch:
+      operationId: updateIssue
+      parameters:
+        - in: path
+          name: number
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IssueUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueOut' }
+        '400': { description: Bad Request }
+        '404': { description: Not Found }
+  /issues/{number}/comments:
+    post:
+      operationId: commentIssue
+      parameters:
+        - in: path
+          name: number
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommentIn' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommentOut' }
+        '404': { description: Not Found }
+  /webhook:
+    post:
+      operationId: webhook
+      summary: GitHub webhook receiver (issues, issue_comment, ping)
+      responses:
+        '204': { description: No Content }
+        '400': { description: Bad Request }
+        '401': { description: Invalid signature }
+  /events:
+    get:
+      operationId: events
+      summary: Last processed webhook deliveries
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    event: { type: string }
+                    action: { type: string }
+                    issue_number: { type: integer, nullable: true }
+                    timestamp: { type: string }
